@@ -344,6 +344,19 @@
         <div class="callout tip">
           <strong>Host contract:</strong> <code>FlowInitiateRequest.StartEvent</code> must parse to an integer event code. Relay host converts it and then calls <code>Relay.NextAsync(...)</code>.
         </div>
+        <div class="callout tip">
+          <strong>Human wait/resume:</strong> <code>WorkflowRelayHost</code> can resume from the last saved state through <code>IWorkflowRelayStateStore</code>. The default store is in-memory for local execution; applications that pause for days or weeks should replace it with a database-backed implementation. Controller-level human actions should call <code>IFlowBus.InitiateAsync</code> with the completion event, while business services remain unaware of relay state.
+        </div>
+        <pre><code>services.AddSingleton&lt;IWorkflowRelayStateStore, DbWorkflowRelayStateStore&gt;();
+services.AddWorkflowRelayService();
+services.AddFlowBus();
+
+await flowBus.InitiateAsync(new FlowInitiateRequest {
+    WorkflowName = "submission-review",
+    EntityId = submissionGuid,
+    StartEvent = "4100",
+    Actor = reviewerEmail
+}, ct);</code></pre>
       </section>
 
       <section class="section" id="example">
