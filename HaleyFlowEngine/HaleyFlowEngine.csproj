@@ -16,8 +16,8 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageReleaseNotes>Pilot release</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/TheHaleyProject/HaleyFlow.Engine</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/TheHaleyProject/HaleyFlow.Engine</RepositoryUrl>
+    <PackageProjectUrl>$(ProjectBaseUrl)Flow.Engine</PackageProjectUrl>
+    <RepositoryUrl>$(ProjectBaseUrl)Flow.Engine</RepositoryUrl>
     <OpenApiGenerateDocuments>false</OpenApiGenerateDocuments>
     <Description>WorkFlow Engine from Haley Libraries</Description>
   </PropertyGroup>
