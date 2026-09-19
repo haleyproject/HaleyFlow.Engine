@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS `activity` (
   `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'Internal surrogate identifier.',
   `display_name` varchar(140) NOT NULL COMMENT 'Human-readable display name.',
   `name` varchar(140) GENERATED ALWAYS AS (lcase(trim(`display_name`))) VIRTUAL COMMENT 'System-generated normalized activity key (lowercase trimmed display_name).',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unq_activity_name` (`name`)
 ) ENGINE=InnoDB AUTO_INCREMENT=1998 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Catalog of business activities tracked by consumers outside core state transitions.';
 
 -- Data exporting was unselected.
@@ -63,7 +64,8 @@ CREATE TABLE IF NOT EXISTS `activity_status` (
   `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'Internal surrogate identifier.',
   `display_name` varchar(120) NOT NULL COMMENT 'Human-readable display name.',
   `name` varchar(120) GENERATED ALWAYS AS (lcase(trim(`display_name`))) VIRTUAL COMMENT 'System-generated normalized status key (lowercase trimmed display_name).',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unq_activity_status_name` (`name`)
 ) ENGINE=InnoDB AUTO_INCREMENT=1998 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Catalog of runtime activity statuses used by consumer-side tracking.';
 
 -- Data exporting was unselected.
@@ -183,7 +185,7 @@ CREATE TABLE IF NOT EXISTS `hook` (
   `created` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'UTC timestamp when the row was created.',
   `instance_id` bigint(20) NOT NULL COMMENT 'Workflow instance identifier (FK to instance.id).',
   `type` bit(1) NOT NULL DEFAULT b'1' COMMENT 'Decides if a hook is bloking or not\n1 - Gate : requires successful hook completion before progression.\n0 - Effect : if fails, nothing happens.',
-  `order_seq` smallint(6) NOT NULL DEFAULT 1 COMMENT 'Dispatch order sequence; lower numbers are dispatched first.',
+  `order_seq` int(11) NOT NULL DEFAULT 1 COMMENT 'Dispatch order sequence; lower numbers are dispatched first.',
   `ack_mode` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'ACK aggregation mode: 0=AllConsumersMustProcess, 1=AnyConsumerMaySatisfy.',
   `send_mode` tinyint(4) NOT NULL DEFAULT 0 COMMENT 'Effect carry-forward mode: 0=No, 1=Always. Relevant only for effect hooks.',
   `route_id` bigint(20) NOT NULL COMMENT 'Route identifier to invoke for this hook (FK to hook_route.id).',
@@ -244,13 +246,14 @@ CREATE TABLE IF NOT EXISTS `hook_route` (
   `name` varchar(240) NOT NULL COMMENT 'Unique hook route name invoked by consumers.',
   `label` varchar(120) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `unq_route` (`name`,`label`)
+  UNIQUE KEY `unq_hook_route_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Canonical route names targeted by hook dispatching.';
 
 -- Data exporting was unselected.
 
 -- Dumping structure for table lcstate.instance
 CREATE TABLE IF NOT EXISTS `instance` (
+  `revision` bigint(20) NOT NULL DEFAULT 0 COMMENT 'Incremented on every transition, including self-loops.',
   `def_version` int(11) NOT NULL COMMENT 'Definition version identifier (FK to def_version.id).',
   `current_state` int(11) NOT NULL DEFAULT 0 COMMENT 'Current state identifier for this instance.',
   `last_event` int(11) DEFAULT NULL COMMENT 'Most recently applied event identifier.',
@@ -460,3 +463,28 @@ CREATE TABLE IF NOT EXISTS `transition` (
 /*!40014 SET FOREIGN_KEY_CHECKS=IFNULL(@OLD_FOREIGN_KEY_CHECKS, 1) */;
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40111 SET SQL_NOTES=IFNULL(@OLD_SQL_NOTES, 1) */;
+
+-- Durable execution recovery and caller idempotency. No dispatch occurs without persisted work.
+CREATE TABLE IF NOT EXISTS lc_execution (
+  lc_id bigint(20) NOT NULL,
+  status tinyint NOT NULL DEFAULT 0 COMMENT '0=Pending, 1=Complete, 2=FailureContinuationPending, 3=Blocked',
+  next_event int DEFAULT NULL,
+  PRIMARY KEY (lc_id),
+  KEY idx_lc_execution_pending (status, lc_id),
+  CONSTRAINT fk_lc_execution_lifecycle FOREIGN KEY (lc_id) REFERENCES lifecycle(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS trigger_receipt (
+  instance_id bigint(20) NOT NULL,
+  request_id varchar(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  result longtext NOT NULL,
+  PRIMARY KEY (instance_id, request_id),
+  CONSTRAINT fk_trigger_receipt_instance FOREIGN KEY (instance_id) REFERENCES instance(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS backfill_import (
+  instance_id bigint(20) NOT NULL,
+  content_hash char(64) NOT NULL,
+  PRIMARY KEY (instance_id),
+  CONSTRAINT fk_backfill_import_instance FOREIGN KEY (instance_id) REFERENCES instance(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

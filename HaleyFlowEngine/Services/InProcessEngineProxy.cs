@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Haley.Abstractions;
 using Haley.Enums;
 using Haley.Models;
@@ -58,8 +59,8 @@ public sealed class InProcessEngineProxy : ILifeCycleEngineProxy {
 
     // Two separate channels: one for lifecycle state transitions, one for hook events.
     // Created at field-init time — always ready to receive events once the engine is wired up.
-    private readonly Channel<ILifeCycleDispatchItem> _transitions = Channel.CreateUnbounded<ILifeCycleDispatchItem>();
-    private readonly Channel<ILifeCycleDispatchItem> _hooks = Channel.CreateUnbounded<ILifeCycleDispatchItem>();
+    private readonly ConcurrentDictionary<long, Channel<ILifeCycleDispatchItem>> _transitions = new();
+    private readonly ConcurrentDictionary<long, Channel<ILifeCycleDispatchItem>> _hooks = new();
 
     private IWorkFlowEngine? _engine;
 
@@ -95,8 +96,8 @@ public sealed class InProcessEngineProxy : ILifeCycleEngineProxy {
     private Task OnEventRaised(ILifeCycleEvent evt) {
         var item = new InProcessDispatchItem(evt);
         var writer = evt.Kind == LifeCycleEventKind.Hook
-            ? _hooks.Writer
-            : _transitions.Writer;
+            ? _hooks.GetOrAdd(evt.ConsumerId, _ => Channel.CreateUnbounded<ILifeCycleDispatchItem>()).Writer
+            : _transitions.GetOrAdd(evt.ConsumerId, _ => Channel.CreateUnbounded<ILifeCycleDispatchItem>()).Writer;
         writer.TryWrite(item);
         return Task.CompletedTask;
     }
@@ -114,14 +115,14 @@ public sealed class InProcessEngineProxy : ILifeCycleEngineProxy {
     // ── Event delivery (poll) ─────────────────────────────────────────────────
     // These drain the in-memory channels. EnsureEngineAsync is called first to guarantee
     // event subscription is in place before any items could be missed.
-    // The consumerId/ackStatus/ttlSeconds/skip parameters are irrelevant in-process
+    // The ackStatus/ttlSeconds/skip parameters are irrelevant in-process
     // (no DB paging, no TTL concept for channels) but are part of the contract so the
     // consumer's poll loop is deployment-agnostic.
 
     public async Task<IReadOnlyList<ILifeCycleDispatchItem>> GetDueTransitionsAsync(long consumerId, int ackStatus, int ttlSeconds, int skip, int take, CancellationToken ct = default) {
         await EnsureEngineAsync(ct);
         var result = new List<ILifeCycleDispatchItem>();
-        while (result.Count < take && _transitions.Reader.TryRead(out var item))
+        while (result.Count < take && _transitions.GetOrAdd(consumerId, _ => Channel.CreateUnbounded<ILifeCycleDispatchItem>()).Reader.TryRead(out var item))
             result.Add(item);
         return result;
     }
@@ -129,7 +130,7 @@ public sealed class InProcessEngineProxy : ILifeCycleEngineProxy {
     public async Task<IReadOnlyList<ILifeCycleDispatchItem>> GetDueHooksAsync(long consumerId, int ackStatus, int ttlSeconds, int skip, int take, CancellationToken ct = default) {
         await EnsureEngineAsync(ct);
         var result = new List<ILifeCycleDispatchItem>();
-        while (result.Count < take && _hooks.Reader.TryRead(out var item))
+        while (result.Count < take && _hooks.GetOrAdd(consumerId, _ => Channel.CreateUnbounded<ILifeCycleDispatchItem>()).Reader.TryRead(out var item))
             result.Add(item);
         return result;
     }

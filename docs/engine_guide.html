@@ -397,6 +397,12 @@
 
 <!-- ═══════════════════════════════ CONTENT ═══════════════════════════════ -->
 <main id="content">
+  <section id="recovery-update" class="section">
+    <h2>Protocol and recovery update: 19 September 2026</h2>
+    <p>Engine and Relay share protocol validation. Only the selected rule supplies hooks, hook completion codes do not inherit transition completion codes, and unordered hooks follow every explicit order. Explicit orders range from 1 through 2147483646.</p>
+    <p>The engine waits for every transition consumer, then releases each gate and effect phase in order. Persisted execution work recovers interrupted ACK progression. Consumer outbox confirmation covers both the ACK and any permitted continuation.</p>
+    <p>See <a href="PROTOCOL_RECOVERY_CHANGES.md">implementation, upgrade, and regression details</a>. Apply the explicit schema migration before deploying this version to an existing database.</p>
+  </section>
 <div class="content-inner">
 
   <!-- Hero -->
@@ -652,7 +658,7 @@ _ = Task.Run(() => BeatLoop(engine, envCode, myGuid, cts.Token)); <span class="c
 
   <section class="doc-section" id="flow-ackgate">
     <h3 class="sub-title">3.2b ACK Gate</h3>
-    <p>An opt-in guard on <code>TriggerAsync</code>. When <code>AckGateEnabled=true</code> and <code>SkipAckGate=false</code>, the engine checks whether the latest lifecycle transition still has unresolved <code>lc_ack</code> consumer rows. If it does, the trigger returns immediately with <code>Applied=false, Reason="BlockedByPendingAck"</code>.</p>
+    <p>An opt-in guard on <code>TriggerAsync</code>. When <code>AckGateEnabled=true</code> and <code>SkipAckGate=false</code>, the engine checks whether every transition consumer of the latest lifecycle has processed it, whether gate hooks remain queued or unsatisfied, and whether failure recovery is pending or blocked. It returns <code>BlockedByPendingAck</code>, <code>BlockedByPendingBlockingHook</code>, or <code>BlockedByFailedExecution</code> when the corresponding barrier remains.</p>
 
     <h4 class="mini-title">Check 1 — Transition ACK gate (<code>lc_ack</code>)</h4>
     <pre><code><span class="cm">-- Have all transition consumers finished with the previous lifecycle entry?</span>
@@ -660,8 +666,8 @@ _ = Task.Run(() => BeatLoop(engine, envCode, myGuid, cts.Token)); <span class="c
 SELECT COUNT(*) FROM ack_consumer ac
   JOIN lc_ack la ON la.ack_id = ac.ack_id
   WHERE la.lc_id = (SELECT MAX(id) FROM lifecycle WHERE instance_id = ?)
-    AND ac.status NOT IN (3, 4, 5);</code><span class="lang-label">SQL</span></pre>
-    <p>Scoped to <code>lc_ack</code> — transition consumer delivery rows. If any consumer has not reached a terminal status: <code>Reason: "BlockedByPendingAck"</code>.</p>
+    AND ac.status &lt;&gt; 3;</code><span class="lang-label">SQL</span></pre>
+    <p>Scoped to <code>lc_ack</code> — transition consumer delivery rows. If any consumer has not ACKed Processed: <code>Reason: "BlockedByPendingAck"</code>.</p>
 
     <div class="card-grid">
       <div class="card">
@@ -671,7 +677,7 @@ SELECT COUNT(*) FROM ack_consumer ac
       <div class="card">
         <div class="card-title">What the ACK gate does NOT check</div>
         <ul>
-          <li>Hook ACK rows — hook sequencing is owned by the engine ACK orchestration path, not by this trigger guard</li>
+          <li>Completed hook work; queued and unsatisfied gate hooks are checked by the trigger guard</li>
           <li>Effect hooks — they are ordered work, but they are not part of the trigger gate</li>
           <li>Earlier lifecycle entries — only the latest lifecycle transition ACKs are scoped</li>
         </ul>
@@ -1109,7 +1115,7 @@ SELECT COUNT(*) FROM ack_consumer ac
 
   <section class="doc-section" id="chore-order">
     <h3 class="sub-title">5.8 Per-Consumer Per-Instance Ordering</h3>
-    <p>When catching up after downtime, events are dispatched in <code>lifecycle.id</code> ascending order per <code>(consumer, instance)</code>. Keeps consumer replay deterministic.</p>
+    <p>The consumer queues lifecycle and hook phases per instance. A phase finishes before the following phase executes; hooks within one phase may execute concurrently. Different instances remain concurrent. Use one active manager for each consumer identity.</p>
   </section>
 
   <section class="doc-section" id="chore-atleast">
@@ -1273,7 +1279,7 @@ SELECT COUNT(*) FROM ack_consumer ac
           <tr><td><code>type</code></td><td>string</td><td><code>"gate"</code> or <code>"effect"</code>. Gate hooks participate in ordering and can suspend an instance on retry exhaustion. Effect hooks are advisory side effects.</td></tr>
           <tr><td><code>group</code></td><td>string?</td><td>Group name. Emits sharing the same group in the same rule are tracked together. <code>HOOK_GROUP_COMPLETE</code> fires when all are Processed.</td></tr>
           <tr><td><code>order</code></td><td>int</td><td>Emission order stage. Lower values run first. If omitted, the hook runs last (<code>int.MaxValue</code> semantics in both engine and relay).</td></tr>
-          <tr><td><code>ack_mode</code></td><td>string</td><td><code>"all"</code> (default) — every targeted consumer must ACK Processed. <code>"any"</code> — the first successful consumer satisfies the group.</td></tr>
+          <tr><td><code>ack_mode</code></td><td>string</td><td><code>"all"</code> (default) — every targeted consumer must ACK Processed. <code>"any"</code> — the first successful consumer satisfies this hook occurrence only.</td></tr>
           <tr><td><code>params</code></td><td>string[]</td><td>Param codes to resolve from the <code>params</code> catalog. Overrides rule-level params.</td></tr>
           <tr><td><code>complete</code></td><td>object</td><td><code>{ "success": eventCode, "failure": eventCode }</code>. Overrides rule-level complete.</td></tr>
           <tr><td><code>on_entry</code></td><td>bool</td><td>Default <code>true</code>. Set <code>false</code> for on-exit hooks.</td></tr>
@@ -1491,7 +1497,7 @@ SELECT COUNT(*) FROM ack_consumer ac
         <div class="card-title">ack_mode: "any"</div>
         <ul>
           <li>First consumer to ACK <code>Processed</code> satisfies the hook</li>
-          <li>Engine immediately marks all other <code>ack_consumer</code> sibling rows as <code>Processed</code></li>
+          <li>Engine marks remaining nonterminal consumers for the same hook ACK envelope as <code>Processed</code></li>
           <li>Monitor stops retrying the others automatically</li>
           <li>Use for competing-consumer patterns (fan out to multiple providers, accept the fastest response)</li>
           <li>If <code>type = "gate"</code>: next hook order advances as soon as one consumer succeeds</li>
@@ -1517,15 +1523,12 @@ SELECT COUNT(*) FROM ack_consumer ac
       <code>ack_mode=any</code> fan-out runs before the group-completion check. The <code>COUNT_UNRESOLVED_IN_GROUP</code> query treats <code>status IN (3,4)</code> as terminal, so <code>HOOK_GROUP_COMPLETE</code> fires correctly once all hooks in the group are satisfied — regardless of whether they were satisfied by "any" or "all".
     </div>
 
-    <h4 class="mini-title">Example — fastest credit bureau wins, then audit</h4>
-    <pre><code><span class="jk">"emit"</span>: [
-  <span class="cm">// order 1: fan out to two bureaus — first one to respond wins</span>
-  { <span class="jk">"route"</span>: <span class="jv">"CREDIT.CHECK_BUREAU_A"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">1</span>, <span class="jk">"ack_mode"</span>: <span class="jv">"any"</span>, <span class="jk">"group"</span>: <span class="jv">"bureau_check"</span> },
-  { <span class="jk">"route"</span>: <span class="jv">"CREDIT.CHECK_BUREAU_B"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">1</span>, <span class="jk">"ack_mode"</span>: <span class="jv">"any"</span>, <span class="jk">"group"</span>: <span class="jv">"bureau_check"</span> },
-  <span class="cm">// order 2: once bureau done, mandatory audit record</span>
-  { <span class="jk">"route"</span>: <span class="jv">"AUDIT.RECORD_CREDIT_DECISION"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">2</span> }
-]</code><span class="lang-label">JSON</span></pre>
-    <p style="margin-top:8px">Sequence: bureau A or B responds first → sibling auto-marked Processed → <code>HOOK_GROUP_COMPLETE</code> fires for <code>bureau_check</code> → order 2 dispatches → audit consumer ACKs → all hooks done → engine emits a <code>Complete</code> event with the resolved next code. The consumer then accepts that <code>NextEvent</code> or overrides it in <code>OnTransitionCompleteAsync</code>.</p>
+    <h4 class="mini-title">Example: alternative consumers for one credit check</h4>
+    <pre><code>"emit": [
+  { "route": "CREDIT.CHECK", "type": "gate", "order": 1, "ack_mode": "any" },
+  { "route": "AUDIT.RECORD_CREDIT_DECISION", "type": "gate", "order": 2 }
+]</code></pre>
+    <p>Register both bureau consumers for the single CREDIT.CHECK hook. One successful consumer satisfies that hook. Order 2 then starts. Two distinct routes would remain two independent obligations, even if both specify ack_mode="any" or share a group.</p>
   </section>
 
   <section class="doc-section" id="pol-timeouts">
@@ -1673,7 +1676,7 @@ UPDATE ack_consumer ac
 <span class="sql-kw">ALTER TABLE</span> <span class="sql-id">hook</span>
   <span class="sql-kw">ADD COLUMN</span> <span class="sql-id">route_id</span>  BIGINT   <span class="sql-kw">NOT NULL</span>,
   <span class="sql-kw">ADD COLUMN</span> <span class="sql-id">group_id</span>  BIGINT   <span class="sql-kw">NULL</span>,
-  <span class="sql-kw">ADD COLUMN</span> <span class="sql-id">order_seq</span> SMALLINT <span class="sql-kw">NOT NULL DEFAULT</span> <span class="jn">1</span>  <span class="sql-cm">COMMENT 'emission order; lower fires first; same order = parallel'</span>,
+  <span class="sql-kw">ADD COLUMN</span> <span class="sql-id">order_seq</span> INT <span class="sql-kw">NOT NULL DEFAULT</span> <span class="jn">1</span>  <span class="sql-cm">COMMENT 'emission order; lower fires first; same order = parallel'</span>,
   <span class="sql-kw">ADD COLUMN</span> <span class="sql-id">ack_mode</span>  TINYINT  <span class="sql-kw">NOT NULL DEFAULT</span> <span class="jn">0</span>  <span class="sql-cm">COMMENT '0=All consumers must ACK; 1=Any one ACK satisfies'</span>,
   <span class="sql-kw">ADD CONSTRAINT</span> <span class="sql-id">fk_hook_route</span> <span class="sql-kw">FOREIGN KEY</span> (<span class="sql-id">route_id</span>) <span class="sql-kw">REFERENCES</span> <span class="sql-id">hook_route</span>(<span class="sql-id">id</span>),
   <span class="sql-kw">ADD CONSTRAINT</span> <span class="sql-id">fk_hook_group</span> <span class="sql-kw">FOREIGN KEY</span> (<span class="sql-id">group_id</span>) <span class="sql-kw">REFERENCES</span> <span class="sql-id">hook_group</span>(<span class="sql-id">id</span>);
@@ -2670,81 +2673,10 @@ engine.EventRaised += <span class="kw">async</span> (e) => {
 <span class="cm">// Returns ordered JSON: states, transitions, actors, timestamps, activity rows</span></code><span class="lang-label">C#</span></pre>
   </section>
 
-  <section class="doc-section" id="ex-orderedhooks">
-    <h3 class="sub-title">Example 6 — Ordered Hooks &amp; Any ACK </h3>
-    <p>A loan application requires two parallel credit-bureau checks (first response wins), followed by a decision step and an effect summary email.</p>
-
-    <h4 class="mini-title">Policy JSON</h4>
-    <pre><code>{
-  <span class="jk">"rules"</span>: [{
-    <span class="jk">"state"</span>: <span class="jv">"UnderReview"</span>, <span class="jk">"via"</span>: <span class="jn">100</span>,
-    <span class="jk">"emit"</span>: [
-      <span class="cm">// Stage 1 — both bureaus queried in parallel; first ACK wins</span>
-      { <span class="jk">"route"</span>: <span class="jv">"CREDIT.BUREAU_A"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">1</span>, <span class="jk">"ack_mode"</span>: <span class="jv">"any"</span>, <span class="jk">"group"</span>: <span class="jv">"credit_check"</span> },
-      { <span class="jk">"route"</span>: <span class="jv">"CREDIT.BUREAU_B"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">1</span>, <span class="jk">"ack_mode"</span>: <span class="jv">"any"</span>, <span class="jk">"group"</span>: <span class="jv">"credit_check"</span> },
-      <span class="cm">// Stage 2 — decision after credit check completes (effect email runs immediately)</span>
-      { <span class="jk">"route"</span>: <span class="jv">"NOTIFY.SUMMARY_EMAIL"</span>, <span class="jk">"type"</span>: <span class="jv">"effect"</span>, <span class="jk">"order"</span>: <span class="jn">2</span> },
-      { <span class="jk">"route"</span>: <span class="jv">"DECISION.MAKE"</span>, <span class="jk">"type"</span>: <span class="jv">"gate"</span>, <span class="jk">"order"</span>: <span class="jn">2</span> }
-    ]
-  }]
-}</code><span class="lang-label">JSON</span></pre>
-
-    <h4 class="mini-title">Engine + consumer code</h4>
-    <pre><code><span class="cm">// — Engine side — subscribe to notices</span>
-engine.NoticeRaised += <span class="kw">async</span> (n) => {
-    <span class="kw">switch</span> (n.Code) {
-        <span class="kw">case</span> <span class="st">"HOOK_ORDER_ADVANCED"</span>:
-            <span class="cm">// informational: stages 2+ dispatched automatically</span>
-            _log.Info(<span class="st">"Order {Seq} hooks dispatched for {Inst}"</span>,
-                n.Data[<span class="st">"orderSeq"</span>], n.Data[<span class="st">"instanceGuid"</span>]);
-            <span class="kw">break</span>;
-        <span class="kw">case</span> <span class="st">"HOOK_GROUP_COMPLETE"</span> <span class="kw">when</span> (<span class="ty">string</span>)n.Data[<span class="st">"groupName"</span>] == <span class="st">"credit_check"</span>:
-            <span class="cm">// optional: fire additional automation after both bureaus done</span>
-            _log.Info(<span class="st">"Credit check group complete for {Inst}"</span>, n.Data[<span class="st">"instanceGuid"</span>]);
-            <span class="kw">break</span>;
-    }
-};
-
-<span class="cm">// — Consumer side — handle hook events</span>
-consumer.EventRaised += <span class="kw">async</span> (e) => {
-    <span class="kw">if</span> (e <span class="kw">is not</span> <span class="ty">ILifeCycleHookEvent</span> hook) <span class="kw">return</span>;
-
-    <span class="kw">switch</span> (hook.Route) {
-        <span class="kw">case</span> <span class="st">"CREDIT.BUREAU_A"</span>:
-        <span class="kw">case</span> <span class="st">"CREDIT.BUREAU_B"</span>:
-            <span class="kw">var</span> score = <span class="kw">await</span> _bureau.QueryAsync(hook.Route, hook.EntityId);
-            <span class="cm">// ack_mode=any: first ACK triggers the engine to mark the other bureau</span>
-            <span class="cm">// ack_consumer row Processed automatically — no need to coordinate.</span>
-            <span class="kw">await</span> consumer.AckAsync(hook.AckGuid, <span class="ty">AckOutcome</span>.Processed);
-            <span class="kw">break</span>;
-
-        <span class="kw">case</span> <span class="st">"DECISION.MAKE"</span>:
-            <span class="cm">// Only reaches here after order=1 gate hooks are all Processed</span>
-            <span class="kw">var</span> approved = <span class="kw">await</span> _underwriter.DecideAsync(hook.EntityId);
-            <span class="kw">await</span> consumer.AckAsync(hook.AckGuid, <span class="ty">AckOutcome</span>.Processed);
-            <span class="cm">// then fire engine transition based on decision...</span>
-            <span class="kw">break</span>;
-
-        <span class="kw">case</span> <span class="st">"NOTIFY.SUMMARY_EMAIL"</span>:
-            <span class="cm">// type=effect — dispatched alongside DECISION.MAKE at order=2</span>
-            <span class="kw">await</span> _mailer.SendAsync(hook.EntityId);
-            <span class="kw">await</span> consumer.AckAsync(hook.AckGuid, <span class="ty">AckOutcome</span>.Processed);
-            <span class="kw">break</span>;
-    }
-};</code><span class="lang-label">C#</span></pre>
-
-    <h4 class="mini-title">Dispatch sequence</h4>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Step</th><th>What happens</th></tr></thead>
-        <tbody>
-          <tr><td>1. Trigger fires</td><td>Order=1 hooks dispatched: <code>CREDIT.BUREAU_A</code> + <code>CREDIT.BUREAU_B</code> (parallel)</td></tr>
-          <tr><td>2. Bureau A responds first</td><td>Consumer ACKs Processed → engine fan-out marks Bureau B's <code>ack_consumer</code> Processed (<code>ack_mode=any</code>)</td></tr>
-          <tr><td>3. All order=1 gate hooks done</td><td>Engine advances: order=2 dispatched atomically. <code>NOTIFY.SUMMARY_EMAIL</code> + <code>DECISION.MAKE</code> both fire. Notice <code>HOOK_ORDER_ADVANCED</code> raised.</td></tr>
-          <tr><td>4. Decision ACKed Processed</td><td>All hooks complete. Email was an effect hook, so its failure (if any) fires <code>ACK_FAIL</code> only.</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <section id="ex-orderedhooks" class="section">
+    <h3>Example 6: ordered hooks and alternative consumers</h3>
+    <p>One CREDIT.CHECK gate is delivered to two bureau consumers with order 1 and ack_mode="any". The first successful ACK satisfies that hook. A DECISION.MAKE gate follows at order 2, with a NOTIFY.SUMMARY_EMAIL effect also at order 2.</p>
+    <p>All transition consumers must validate before the credit check starts. The decision gate starts when the credit check is satisfied. The summary effect starts after the decision gate succeeds. The Complete handoff follows when the effect finishes or expires.</p>
   </section>
 
 

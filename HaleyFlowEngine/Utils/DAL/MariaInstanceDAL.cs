@@ -19,8 +19,6 @@ namespace Haley.Internal {
             => Db.RowAsync(QRY_INSTANCE.GET_BY_DEF_ID_AND_ENTITY_ID, load, (DEF_ID, defId), (ENTITY_ID, entityId));
 
         public async Task<string?> UpsertByKeyReturnGuidAsync(long defVersionId, string entityId, long currentStateId, long? lastEventId, long policyId, uint flags, string? metadata, DbExecutionLoad load = default) {
-            var exists = await Db.ScalarAsync<string?>(QRY_INSTANCE.GET_GUID_BY_DEF_VERSION_AND_ENTITY_ID, load, (PARENT_ID, defVersionId), (ENTITY_ID, entityId));
-            if (!string.IsNullOrWhiteSpace(exists)) return exists;
             return await Db.ScalarAsync<string?>(QRY_INSTANCE.UPSERT_BY_DEF_ID_AND_ENTITY_ID_RETURN_GUID, load, (PARENT_ID, defVersionId), (ENTITY_ID, entityId), (STATE_ID, currentStateId), (EVENT_ID, lastEventId), (POLICY_ID, policyId), (FLAGS, flags), (METADATA, metadata));
         }
 

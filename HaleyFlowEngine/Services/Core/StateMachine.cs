@@ -46,7 +46,6 @@ namespace Haley.Services {
         // Returns a result with Applied=false (and a Reason) if the transition cannot proceed:
         //   UnknownEvent      — event name/code not found in this blueprint version
         //   InvalidTransition — no transition defined from current state + this event
-        //   NoOpAlreadyInState— transition points to same state (self-loop — currently a no-op)
         //   ConcurrencyConflict — another process moved the state between our read and our update (CAS miss)
         //
         // The CAS (Compare-And-Swap) on current_state is the concurrency guard:
@@ -83,8 +82,6 @@ namespace Haley.Services {
 
             res.ToStateId = t.ToStateId;
 
-            //Sometimes, we will have transitions that point to the same state (like re-trying, etc.), todo: handle it.
-            if (res.ToStateId == res.FromStateId) { res.Reason = "NoOpAlreadyInState"; return res; }
 
             var cas = await _dal.Instance.UpdateCurrentStateCasAsync(instanceId, fromStateId, res.ToStateId, ev.Id, load);
             if (cas != 1) { res.Reason = "ConcurrencyConflict"; return res; }

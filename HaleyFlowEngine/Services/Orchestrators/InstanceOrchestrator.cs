@@ -2,6 +2,7 @@ using Haley.Abstractions;
 using Haley.Enums;
 using Haley.Models;
 using Haley.Utils;
+using System.Text.Json;
 using static Haley.Internal.KeyConstants;
 
 namespace Haley.Services.Orchestrators {
@@ -47,6 +48,8 @@ namespace Haley.Services.Orchestrators {
             // API boundary validation: fail fast with clear argument errors.
             if (req == null) throw new ArgumentNullException(nameof(req));
             if (string.IsNullOrWhiteSpace(req.Event)) throw new ArgumentNullException(nameof(req.Event));
+            if (req.RequestId != null && (string.IsNullOrWhiteSpace(req.RequestId) || req.RequestId.Length > 160))
+                throw new ArgumentException("RequestId must contain between 1 and 160 characters.", nameof(req));
 
             LifeCycleBlueprint bp;
             if (!string.IsNullOrWhiteSpace(req.InstanceGuid)) {
@@ -74,6 +77,7 @@ namespace Haley.Services.Orchestrators {
 
             // All state change + ack/hook writes are atomic.
             var transaction = _dal.CreateNewTransaction();
+            var initialPolicy = await _policyEnforcer.ResolvePolicyAsync(bp.DefinitionId, new DbExecutionLoad(ct));
             using var tx = transaction.Begin(false);
             var load = new DbExecutionLoad(ct, transaction);
             var committed = false;
@@ -88,13 +92,57 @@ namespace Haley.Services.Orchestrators {
 
             try {
                 // Resolve latest policy first; new instance creation uses this policy id.
-                var policy = await _policyEnforcer.ResolvePolicyAsync(bp.DefinitionId, load);
+                var policy = initialPolicy;
                 instance = await _stateMachine.EnsureInstanceAsync(bp.DefVersionId, req.EntityId, policy.PolicyId ?? 0, req.Metadata, load);
+                instance = await _dal.Execution.LockInstanceAsync(instance.GetLong(KEY_ID), load)
+                    ?? throw new InvalidOperationException("Instance disappeared while acquiring its execution lock.");
+                var lockedInstanceId = instance.GetLong(KEY_ID);
+                if (!string.IsNullOrWhiteSpace(req.RequestId)) {
+                    var receipt = await _dal.Execution.GetReceiptAsync(lockedInstanceId, req.RequestId, load);
+                    if (receipt != null) {
+                        var replay = JsonSerializer.Deserialize<LifeCycleTriggerResult>(receipt)
+                            ?? throw new InvalidOperationException("Invalid stored trigger receipt.");
+                        transaction.Commit();
+                        committed = true;
+                        return replay;
+                    }
+                }
+                var previousLc = await _dal.LifeCycle.GetLastByInstanceAsync(lockedInstanceId, load);
+                var previousLcId = previousLc?.GetLong(KEY_ID) ?? 0;
+                var expectedLcId = req.ExpectedLifeCycleId;
+                if (!string.IsNullOrWhiteSpace(req.SourceAckGuid)) {
+                    var sourceLcId = await _dal.Execution.GetLifecycleByAckAsync(req.SourceAckGuid, load);
+                    if (!sourceLcId.HasValue) throw new ArgumentException("Source ACK does not exist.", nameof(req));
+                    var sourceContext = await _dal.LifeCycle.GetContextByLcIdAsync(sourceLcId.Value, load);
+                    if (sourceContext?.GetLong(KEY_INSTANCE_ID) != lockedInstanceId)
+                        throw new ArgumentException("Source ACK belongs to another instance.", nameof(req));
+                    if (expectedLcId.HasValue && expectedLcId != sourceLcId)
+                        throw new ArgumentException("Source ACK and expected lifecycle disagree.", nameof(req));
+                    expectedLcId = sourceLcId;
+                }
+                if (expectedLcId.HasValue && expectedLcId != previousLcId) {
+                    transaction.Commit();
+                    committed = true;
+                    return new LifeCycleTriggerResult { InstanceGuid = instance.GetString(KEY_GUID) ?? string.Empty,
+                        InstanceId = lockedInstanceId, Reason = "StaleContinuation" };
+                }
+                if (!string.IsNullOrWhiteSpace(req.SourceAckGuid)) {
+                    var ready = await _dal.Execution.GetContinuationReadinessAsync(req.SourceAckGuid, load);
+                    if (ready < 0) throw new ArgumentException("Only NormalRun transition and Complete ACKs can own consumer continuation.", nameof(req));
+                    if (ready == 0) {
+                        transaction.Commit();
+                        committed = true;
+                        return new LifeCycleTriggerResult { InstanceGuid = instance.GetString(KEY_GUID) ?? string.Empty,
+                            InstanceId = lockedInstanceId, Reason = "BlockedByPendingAck" };
+                    }
+                }
 
                 // Existing instances are version-locked. Reload exact blueprint if needed.
                 var instanceDefVersion = instance.GetLong(KEY_DEF_VERSION);
                 if (instanceDefVersion != bp.DefVersionId) {
                     bp = await _blueprintManager.GetBlueprintByVersionIdAsync(instanceDefVersion, ct);
+                        transitionConsumers = await _ackManager.GetTransitionConsumersAsync(bp.DefVersionId, ct);
+                        if (transitionConsumers.Count == 0) throw new InvalidOperationException("Pinned definition has no transition consumers.");
                 }
 
                 // Guard rail: transitions are allowed only for active, non-suspended, non-terminal instances.
@@ -118,8 +166,18 @@ namespace Haley.Services.Orchestrators {
                 // Optional ACK gate: block new transition while prior lifecycle ACKs are unresolved.
                 if (_opt.AckGateEnabled && !req.SkipAckGate) {
                     var gateInstanceId = instance.GetLong(KEY_ID);
+                    var execution = previousLcId > 0 ? await _dal.Execution.GetAsync(previousLcId, load) : null;
+                    if (execution?.GetInt(KEY_STATUS) is 2 or 3) {
+                        transaction.Commit();
+                        committed = true;
+                        return new LifeCycleTriggerResult { InstanceGuid = instance.GetString(KEY_GUID) ?? string.Empty,
+                            InstanceId = gateInstanceId, Reason = "BlockedByFailedExecution" };
+                    }
                     var pendingAckCount = await _dal.LcAck.CountPendingForInstanceAsync(gateInstanceId, load);
-                    if (pendingAckCount > 0) {
+                    var blockingHooks = previousLcId <= 0 ? 0 :
+                        await _dal.Hook.CountPendingBlockingHookAcksAsync(gateInstanceId, previousLcId, load)
+                        + await _dal.Hook.CountUndispatchedBlockingHooksAsync(gateInstanceId, previousLcId, load);
+                    if (pendingAckCount > 0 || blockingHooks > 0) {
                         // Persist any new instance row before returning blocked result.
                         transaction.Commit();
                         committed = true;
@@ -127,7 +185,7 @@ namespace Haley.Services.Orchestrators {
                             Applied = false,
                             InstanceGuid = instance.GetString(KEY_GUID) ?? string.Empty,
                             InstanceId = gateInstanceId,
-                            Reason = "BlockedByPendingAck",
+                            Reason = pendingAckCount > 0 ? "BlockedByPendingAck" : "BlockedByPendingBlockingHook",
                             LifecycleAckGuids = Array.Empty<string>(),
                             HookAckGuids = Array.Empty<string>()
                         };
@@ -167,6 +225,7 @@ namespace Haley.Services.Orchestrators {
 
                 // Important: evaluate rules from policy actually attached to this instance.
                 var pid = instance.GetLong(KEY_POLICY_ID);
+                pr = policy;
                 if (pid > 0) pr = await _policyEnforcer.ResolvePolicyByIdAsync(pid, load);
 
                 // One lifecycle ack_guid is shared across all transition consumers.
@@ -213,6 +272,12 @@ namespace Haley.Services.Orchestrators {
                 // Emit hook rows via policy engine. These stay durable in DB with dispatched=0
                 // until the lifecycle ACK path decides which hook order to release next.
                 var hookEmissions = await _policyEnforcer.EmitHooksAsync(bp, instance, transition, load, pr);
+                await _dal.Execution.EnsureAsync(transition.LifeCycleId.Value, load);
+                if (previousLcId > 0 && req.SkipAckGate) {
+                    await _dal.Hook.CancelPendingHookAckConsumersAsync(instanceId, previousLcId, load);
+                    await _dal.HookLc.SkipUndispatchedByLcIdAsync(previousLcId, load);
+                    await _dal.Execution.SetAsync(previousLcId, 1, null, load);
+                }
 
                 // Now that we know whether hooks exist, set DispatchMode on transition events.
                 // NormalRun = no hooks; ValidationMode = hooks present (consumer must not auto-transition).
@@ -222,13 +287,15 @@ namespace Haley.Services.Orchestrators {
                 }
 
                 // Durability before delivery: commit first, then dispatch.
+                result.LifecycleAckGuids = lcAckGuids;
+                result.HookAckGuids = Array.Empty<string>();
+                if (!string.IsNullOrWhiteSpace(req.RequestId))
+                    await _dal.Execution.SaveReceiptAsync(instanceId, req.RequestId, JsonSerializer.Serialize(result), load);
                 transaction.Commit();
                 committed = true;
 
                 await _dispatchEventsAsync(toDispatch, ct);
 
-                result.LifecycleAckGuids = lcAckGuids;
-                result.HookAckGuids = Array.Empty<string>();
                 return result;
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 if (!committed) { try { transaction.Rollback(); } catch { } }

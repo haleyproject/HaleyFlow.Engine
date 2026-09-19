@@ -170,7 +170,7 @@ namespace Haley.Internal {
                    (h.ack_mode = 0 AND EXISTS (
                      SELECT 1 FROM hook_ack ha
                      JOIN ack_consumer ac ON ac.ack_id = ha.ack_id
-                     WHERE ha.hook_id = hl.id AND ac.status NOT IN (3, 4, 5)
+                     WHERE ha.hook_id = hl.id AND ac.status <> 3
                    ))
                    OR
                    (h.ack_mode = 1 AND NOT EXISTS (

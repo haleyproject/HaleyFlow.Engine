@@ -1,5 +1,11 @@
 # HaleyFlow Workflow Engine & Consumer — Test Checklist
 
+## Executable regression coverage
+
+The xUnit suite in [WFE.Test](../WFE.Test/README.md) now executes protocol, Engine, Consumer, recovery, migration, and historical-import regressions. Use the disposable MariaDB runner described there for the complete suite. Database tests are skipped explicitly when no test connection is configured.
+
+The remaining checklist is a broader manual and planned scenario matrix. An unchecked item below does not describe the status of the focused automated regressions. See [implemented recovery behavior](PROTOCOL_RECOVERY_CHANGES.md) for the current contract.
+
 > **How to use this checklist**: Each test case has a **Scenario**, **Input** (setup / trigger), and **Expected outcome**. Work through these when building a production application or regression suite. Check off cases as you verify them.
 
 ---

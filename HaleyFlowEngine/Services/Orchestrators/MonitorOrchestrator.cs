@@ -22,7 +22,7 @@ namespace Haley.Services.Orchestrators {
     //    States with a timeouts policy rule are handled exclusively here; the stale scan skips them.
     //
     //    Case A — timeout_event IS set:
-    //      INSERT idempotency marker first, then TriggerAsync. Fires TIMEOUT_FIRED notice.
+    // Trigger with a durable request receipt before recording the timeout audit marker.
     //
     //    Case B — no timeout_event (advisory escalation):
     //      Fires STATE_TIMEOUT_EXCEEDED notices on repeat schedule using DefaultStateStaleDuration
@@ -85,7 +85,7 @@ namespace Haley.Services.Orchestrators {
         }
 
         // Case A: timeout_event IS set — engine auto-transitions the instance.
-        // Inserts idempotency marker BEFORE TriggerAsync; next tick skips on crash.
+        // Trigger with a durable request receipt before recording the timeout audit marker.
         private async Task ProcessCaseATimeoutsAsync(CancellationToken ct) {
             var excluded = (uint)(LifeCycleInstanceFlag.Suspended | LifeCycleInstanceFlag.Completed | LifeCycleInstanceFlag.Failed | LifeCycleInstanceFlag.Archived);
             var take = _opt.MonitorPageSize > 0 ? _opt.MonitorPageSize : 200;
@@ -106,30 +106,22 @@ namespace Haley.Services.Orchestrators {
 
                     if (eventCode <= 0 || string.IsNullOrWhiteSpace(instanceGuid)) continue;
 
-                    // Idempotency marker first — crash between here and TriggerAsync means next tick skips.
-                    await _dal.LcTimeout.InsertCaseAAsync(lcId, policyMaxRetry > 0 ? policyMaxRetry : (int?)null, new DbExecutionLoad(ct));
-
-                    // Cancel all non-terminal ack_consumer rows for blocking hooks in the current
-                    // lifecycle entry before firing the timeout transition. This ensures:
-                    //   (a) the DB reflects that these hooks were forcibly closed by a timeout, and
-                    //   (b) late-arriving ACKs from consumers are rejected with STALE_ACK_RECEIVED.
-                    // We resolve instanceId from the guid here; it is only needed for the cancel call.
-                    var timeoutInstanceId = await _dal.Instance.GetIdByGuidAsync(instanceGuid, new DbExecutionLoad(ct)) ?? 0;
-                    if (timeoutInstanceId > 0) {
-                        var cancelledCount = await _dal.Hook.CancelPendingBlockingHookAckConsumersAsync(timeoutInstanceId, lcId, new DbExecutionLoad(ct));
-                        if (cancelledCount > 0) {
-                            _fireNotice(LifeCycleNotice.Info("HOOK_ACK_CANCELLED", "HOOK_ACK_CANCELLED",
-                                $"Blocking hook ACKs cancelled by timeout. instance={instanceGuid} lc_id={lcId} cancelled={cancelledCount}"));
-                        }
-                    }
-
+                    // Trigger with a durable request receipt before recording the timeout audit marker.
                     try {
-                        await _triggerAsync(new LifeCycleTriggerRequest {
+                        var result = await _triggerAsync(new LifeCycleTriggerRequest {
                             InstanceGuid = instanceGuid,
                             Event        = eventCode.ToString(),
                             Actor        = "engine.monitor",
-                            SkipAckGate  = true
+                            SkipAckGate  = true,
+                            RequestId = $"timeout:{lcId}",
+                            ExpectedLifeCycleId = lcId
                         }, ct);
+                        if (!result.Applied && result.Reason != "StaleContinuation") {
+                            _fireNotice(LifeCycleNotice.Warn("TIMEOUT_PENDING", "TIMEOUT_PENDING",
+                                $"Timeout remains pending. instance={instanceGuid} reason={result.Reason}"));
+                            continue;
+                        }
+                        await _dal.LcTimeout.InsertCaseAAsync(lcId, policyMaxRetry > 0 ? policyMaxRetry : (int?)null, new DbExecutionLoad(ct));
                         _fireNotice(LifeCycleNotice.Info("TIMEOUT_FIRED", "TIMEOUT_FIRED",
                             $"Policy timeout fired. instance={instanceGuid} event={eventCode}"));
                     } catch (OperationCanceledException) {
@@ -257,7 +249,7 @@ namespace Haley.Services.Orchestrators {
 
                 // Effect hook timeout: single fixed window — no retries after EffectTimeoutSeconds.
                 if (!isGate) {
-                    var elapsedSec = (DateTime.UtcNow - item.LastTrigger).TotalSeconds;
+                    var elapsedSec = (DateTime.UtcNow - item.CreatedAt).TotalSeconds;
                     if (elapsedSec >= effectTimeoutSec) {
                         // Time window expired — abandon and advance hook ordering.
                         try {

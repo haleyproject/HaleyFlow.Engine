@@ -1,71 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <HaleyProject Condition="'$(HaleyProject)' == ''">$(MSBuildProjectDirectory)\..\..</HaleyProject>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\..\HaleyProject\HaleyProject.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
-
-  <Import Project="$(SolutionDir)ProjectReferences_$(SolutionName).txt" Condition="Exists('$(SolutionDir)ProjectReferences_$(SolutionName).txt')" />
-
-  <Choose>
-    <When Condition="Exists('$(HaleyFlowEngineProj)')">
-      <ItemGroup>
-        <ProjectReference Include="$(HaleyFlowEngineProj)">
-          <Name>HaleyFlowEngine</Name>
-        </ProjectReference>
-      </ItemGroup>
-    </When>
-    <Otherwise>
-      <ItemGroup>
-        <PackageReference Include="Haley.Flow.Engine" Version="0.0.1" />
-      </ItemGroup>
-    </Otherwise>
-  </Choose>
-
-  <Choose>
-    <When Condition="Exists('$(HaleyLogProj)')">
-      <ItemGroup>
-        <ProjectReference Include="$(HaleyLogProj)">
-          <Name>HaleyLog</Name>
-        </ProjectReference>
-      </ItemGroup>
-    </When>
-    <Otherwise>
-      <ItemGroup>
-        <PackageReference Include="Haley.Log" Version="0.0.1" />
-      </ItemGroup>
-    </Otherwise>
-  </Choose>
-
-  <Choose>
-    <When Condition="Exists('$(HaleyHelpersProj)')">
-      <ItemGroup>
-        <ProjectReference Include="$(HaleyHelpersProj)">
-          <Name>HaleyHelpers</Name>
-        </ProjectReference>
-      </ItemGroup>
-    </When>
-    <Otherwise>
-      <ItemGroup>
-        <PackageReference Include="Haley.Helpers" Version="2.4.1" />
-      </ItemGroup>
-    </Otherwise>
-  </Choose>
-
+  <Import Project="$(HaleyProject)\HaleyProject\Haley.Source.Props" />
+  <Import Project="$(HaleyProject)\HaleyProject\Haley.Version.Props" />
+  <Import Project="$(HaleyProject)\HaleyProject\Haley.Paths.Props" />
   <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
+    <ProjectReference Include="..\HaleyFlowEngine\HaleyFlowEngine.csproj" />
     <ProjectReference Include="..\..\HaleyFlow.Consumer\HaleyFlowConsumer\HaleyFlowConsumer.csproj" />
-    <ProjectReference Include="..\WFE.Lib\WFE.Lib.csproj" />
   </ItemGroup>
-
   <ItemGroup>
-    <Content Include="..\WFE.Lib\UseCases\**\*.json" Link="UseCases\%(RecursiveDir)%(Filename)%(Extension)">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-    <Content Include="appsettings.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
+    <Content Include="..\_RESOURCES\lc_state.sql" Link="Sql\engine.sql" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\HaleyFlow.Consumer\__RESOURCES\consumer.sql" Link="Sql\consumer.sql" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\_RESOURCES\migrations\20260919_protocol_recovery.sql" Link="Sql\upgrade.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-
 </Project>

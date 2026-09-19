@@ -323,6 +323,13 @@
 
 <!-- ── Main content ── -->
 <main>
+  <section id="durable-execution-update">
+    <h2>Implementation conformance update: 19 September 2026</h2>
+    <p>Engine and Relay enforce the shared protocol validator. Explicit hook order is an integer from 1 through 2147483646; omitted order follows all explicit orders. Valid self-loops create new lifecycle occurrences and fresh hook occurrences.</p>
+    <p>The engine waits for all transition consumers before releasing the selected rule's hooks. Hook completion codes never inherit transition codes. Runtime fallback to transition failure handling remains valid.</p>
+    <p>For durable delivery, ack_mode="any" applies only to consumers of one hook occurrence. Separate routes and groups do not share that satisfaction. Consumer outbox confirmation follows both ACK and continuation, with a stable request key making retries safe.</p>
+    <p>See <a href="PROTOCOL_RECOVERY_CHANGES.md">recovery and upgrade notes</a> for the ACK gate contract, schema changes, and automated tests.</p>
+  </section>
 
   <!-- Hero -->
   <div class="hero">

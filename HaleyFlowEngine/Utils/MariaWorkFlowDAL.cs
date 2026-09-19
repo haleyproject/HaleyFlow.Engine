@@ -27,6 +27,7 @@ namespace Haley.Utils {
         public IEngineCareDAL EngineCare { get; }
         public ILifeCycleTimeoutDAL LcTimeout { get; }
         public ILcNextDAL LcNext { get; }
+        public IExecutionDAL Execution { get; }
         public MariaWorkFlowDAL(IAdapterGateway agw, string key) : base(agw, key) {
             Blueprint = new MariaBlueprintReadDAL(this);
             BlueprintWrite = new MariaBlueprintWriteDAL(this);
@@ -53,6 +54,7 @@ namespace Haley.Utils {
             EngineCare = new MariaEngineCareDAL(this);
             LcTimeout = new MariaLifeCycleTimeoutDAL(this);
             LcNext = new MariaLcNextDAL(this);
+            Execution = new MariaExecutionDAL(this);
         }
     }
 }

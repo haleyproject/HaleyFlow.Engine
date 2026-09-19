@@ -1,5 +1,11 @@
 # Definition & Policy Contract
 
+## Implemented validation and ordering
+
+Engine and Relay imports share the snapshot reader and policy validator. Unknown policy states retain warning severity. Invalid rule shapes, hook types, ACK modes, completion destinations, and explicit order values are rejected before persistence. Policy imports require their definition. Only the last matching via-specific rule, or the last general fallback, emits hooks.
+
+Explicit hook order ranges from 1 to 2147483646; omitted order is 2147483647 and always runs last. Rule completion never cascades into hook completion. See [recovery changes](PROTOCOL_RECOVERY_CHANGES.md) for the complete runtime contract and migration.
+
 Rules governing how workflow definition JSON and policy JSON are parsed, validated, and executed.
 Applies equally to the relay (`WorkflowRelay`) and the engine (`WorkFlowEngine`).
 

@@ -122,7 +122,7 @@ namespace Haley.Services {
                             if (string.IsNullOrWhiteSpace(hookRoute)) continue;
 
                             var (emitSuccess, emitFailure) = ReadCompletionEvents(e);
-                            var orderSeq = e.TryGetProperty(KEY_ORDER, out var orderEl) && orderEl.TryGetInt32(out var oVal) && oVal > 0 ? oVal : 999;
+                            var orderSeq = e.TryGetProperty(KEY_ORDER, out var orderEl) && orderEl.TryGetInt32(out var oVal) ? oVal : int.MaxValue;
                             var ackModeStr = e.GetString(KEY_ACK_MODE);
                             var groupRaw = e.GetString(KEY_GROUP);
                             var sendStr = e.GetString(KEY_SEND);
@@ -135,8 +135,8 @@ namespace Haley.Services {
                                 AckMode = string.Equals(ackModeStr, "any", StringComparison.OrdinalIgnoreCase) ? 1 : 0,
                                 SendAlways = string.Equals(sendStr, "always", StringComparison.OrdinalIgnoreCase),
                                 // Collapse completion fallback at parse time: emit wins, else rule's value.
-                                OnSuccess = !string.IsNullOrWhiteSpace(emitSuccess) ? emitSuccess : ruleSuccess,
-                                OnFailure = !string.IsNullOrWhiteSpace(emitFailure) ? emitFailure : ruleFailure,
+                                OnSuccess = emitSuccess,
+                                OnFailure = emitFailure,
                                 ParamCodes = e.ReadList(KEY_PARAMS),
                                 NotBefore = e.GetDatetimeOffset(KEY_NOT_BEFORE),
                                 Deadline = e.GetDatetimeOffset(KEY_DEADLINE)
@@ -198,7 +198,8 @@ namespace Haley.Services {
                                   DateTimeOffset? notBefore, DateTimeOffset? deadline,
                                   IReadOnlyList<LifeCycleParamItem>? resolvedParams)>();
 
-            foreach (var rule in parsed.Rules) {
+            var selectedRule = SelectBestRule(parsed, toState, viaEvent);
+            foreach (var rule in selectedRule == null ? Array.Empty<ParsedPolicyRule>() : new[] { selectedRule }) {
                 load.Ct.ThrowIfCancellationRequested();
 
                 if (!IsStateMatch(rule.State, toState)) continue;
@@ -326,7 +327,7 @@ namespace Haley.Services {
                     if (viaEvent == null || rule.Via!.Value != viaEvent.Code) continue;
                 }
 
-                if (best == null || (hasVia && !bestHasVia)) {
+                if (best == null || hasVia || !bestHasVia) {
                     best = rule;
                     bestHasVia = hasVia;
                 }
@@ -366,8 +367,6 @@ namespace Haley.Services {
 
             // Start from rule-level context.
             var hc = new HookContext {
-                OnSuccessEvent = rule.OnSuccess,
-                OnFailureEvent = rule.OnFailure,
                 Params = ResolveParams(parsed.ParamCatalog, rule.ParamCodes)
             };
 

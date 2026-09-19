@@ -24,8 +24,8 @@ namespace Haley.Internal {
 
         public const string PENDING_ACKS = $@"SELECT a.id AS ack_id, a.guid AS ack_guid, ac.consumer, ac.status, ac.last_trigger, ac.trigger_count, l.* FROM lc_ack la JOIN ack a ON a.id = la.ack_id JOIN ack_consumer ac ON ac.ack_id = a.id JOIN lifecycle l ON l.id = la.lc_id WHERE ac.status = {ACK_STATUS} ORDER BY ac.last_trigger ASC, ac.ack_id ASC, ac.consumer ASC;";
 
-        // Returns count of ack_consumer rows for the most recent lifecycle entry of this instance that are NOT yet terminal (Processed=3, Failed=4, Cancelled=5).
+        // Counts consumers of the latest lifecycle that have not successfully processed it.
         // Used by the ACK gate in TriggerAsync to block new transitions until all consumers have finished with the last transition.
-        public const string COUNT_PENDING_FOR_INSTANCE = $@"SELECT COUNT(*) AS cnt FROM ack_consumer ac JOIN lc_ack la ON la.ack_id = ac.ack_id WHERE la.lc_id = (SELECT MAX(id) FROM lifecycle WHERE instance_id = {INSTANCE_ID}) AND ac.status NOT IN (3, 4, 5);";
+        public const string COUNT_PENDING_FOR_INSTANCE = $@"SELECT COUNT(*) AS cnt FROM ack_consumer ac JOIN lc_ack la ON la.ack_id = ac.ack_id WHERE la.lc_id = (SELECT MAX(id) FROM lifecycle WHERE instance_id = {INSTANCE_ID}) AND ac.status <> 3;";
     }
 }

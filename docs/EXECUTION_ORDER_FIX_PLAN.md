@@ -1,5 +1,7 @@
 # HaleyFlow — Execution Order Fix + Complete Event Kind
 
+> Historical design plan. The implementation is now covered by [protocol conformance and recovery changes](PROTOCOL_RECOVERY_CHANGES.md) and [automated regression tests](../WFE.Test/README.md). Statements below about the old implementation are retained as planning history, not current behavior.
+
 ---
 
 ## Part 1 — The Problem

@@ -10,6 +10,7 @@ namespace Haley.Models {
     internal sealed class LifeCycleHookEvent : LifeCycleEvent, ILifeCycleHookEvent {
         public override LifeCycleEventKind Kind => LifeCycleEventKind.Hook;
         public bool OnEntry { get; set; }
+        public long LifeCycleId { get; set; }
         public string Route { get; set; }
         public DateTimeOffset? NotBefore { get; set; }
         public DateTimeOffset? Deadline { get; set; }

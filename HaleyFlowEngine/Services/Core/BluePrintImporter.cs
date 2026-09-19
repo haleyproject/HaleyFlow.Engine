@@ -4,6 +4,7 @@ using Haley.Models;
 using Haley.Utils;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using static Haley.Internal.KeyConstants;
 
 namespace Haley.Services {
@@ -21,6 +22,7 @@ namespace Haley.Services {
         public async Task<long> ImportDefinitionJsonAsync(int envCode, string envDisplayName, string definitionJson, CancellationToken ct = default) {
             ct.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(definitionJson)) throw new ArgumentNullException(nameof(definitionJson));
+            ValidateProtocol(definitionJson, null, envCode);
 
             using var doc = JsonDocument.Parse(definitionJson);
             var root = doc.RootElement;
@@ -39,6 +41,8 @@ namespace Haley.Services {
             try {
                 var envId = await _dal.BlueprintWrite.EnsureEnvironmentByCodeAsync(envCode, envDisplayName, load);
                 var defId = await _dal.BlueprintWrite.EnsureDefinitionByEnvIdAsync(envId, defName, defDesc, load);
+                var attachedPolicy = await _dal.Blueprint.GetPolicyForDefinition(defId, load);
+                ValidateProtocol(definitionJson, attachedPolicy?.GetString(KEY_CONTENT), envCode);
 
                 var defhashMaterial = root.BuildDefinitionHashMaterial();
                 var defHash = defhashMaterial.CreateGUID(HashMethod.Sha256).ToString();
@@ -124,8 +128,11 @@ namespace Haley.Services {
             var load = new DbExecutionLoad(ct, transaction);
             var committed = false;
             try {
-                var envId = await _dal.BlueprintWrite.EnsureEnvironmentByCodeAsync(envCode, envDisplayName, load);
-                _ = await _dal.BlueprintWrite.EnsureDefinitionByEnvIdAsync(envId, defName!, description: null, load);
+                var definition = await _dal.Blueprint.GetLatestDefVersionByEnvCodeAndDefNameAsync(envCode, defName!, load)
+                    ?? throw new InvalidOperationException("Import the definition before its policy.");
+                var definitionDocument = JsonNode.Parse(definition.GetString(KEY_DATA) ?? "{}")!.AsObject();
+                definitionDocument[KEY_NAME] = defName;
+                ValidateProtocol(definitionDocument.ToJsonString(), policyJson, envCode);
 
                 var policyHashmaterial = root.BuildPolicyHashMaterial();
                 var hash = policyHashmaterial.CreateGUID(HashMethod.Sha256).ToString();
@@ -144,13 +151,21 @@ namespace Haley.Services {
             }
         }
 
+        private static void ValidateProtocol(string definitionJson, string? policyJson, int envCode) {
+            var snapshot = DefinitionJsonReader.ReadSnapshot(definitionJson, policyJson, envCode);
+            var validation = PolicyValidator.Validate(snapshot);
+            var errors = validation.Findings.Where(f => f.Severity == PolicyFindingSeverity.Error).ToList();
+            if (errors.Count > 0)
+                throw new InvalidOperationException("Protocol validation failed: " + string.Join("; ", errors.Select(f => f.Code + ": " + f.Message)));
+        }
+
         private async Task<Dictionary<string, int>> ImportCategoriesFromStatesAsync(JsonElement root, DbExecutionLoad load) {
             var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             if (!root.TryGetProperty(KEY_STATES, out var states) || states.ValueKind != JsonValueKind.Array) return map;
 
             foreach (var s in states.EnumerateArray()) {
                 var cat = s.GetString(KEY_CATEGORY);
-                if (string.IsNullOrWhiteSpace(cat)) continue;
+                if (string.IsNullOrWhiteSpace(cat)) cat = "default";
 
                 var key = cat.N();
                 if (map.ContainsKey(key)) continue;
@@ -184,6 +199,7 @@ namespace Haley.Services {
 
         private async Task<Dictionary<string, StateDef>> ImportStatesAsync(long defVersionId, JsonElement root, Dictionary<string, int> categoryMap, DbExecutionLoad load) {
             var map = new Dictionary<string, StateDef>(StringComparer.OrdinalIgnoreCase);
+            var snapshotStates = DefinitionJsonReader.ReadSnapshot(root.GetRawText()).States;
             if (!root.TryGetProperty(KEY_STATES, out var states) || states.ValueKind != JsonValueKind.Array) return map;
 
             foreach (var s in states.EnumerateArray()) {
@@ -196,8 +212,11 @@ namespace Haley.Services {
                 var flags = (uint)(s.GetInt(KEY_FLAGS) ?? 0);
                 if (s.GetBool(KEY_IS_INITIAL) == true) flags |= (uint)LifeCycleStateFlag.IsInitial;
                 if (s.GetBool(KEY_IS_FINAL) == true) flags |= (uint)LifeCycleStateFlag.IsFinal;
+                if (snapshotStates.Single(st => string.Equals(st.Name, name, StringComparison.OrdinalIgnoreCase)).IsTerminal)
+                    flags |= (uint)LifeCycleStateFlag.IsFinal;
 
                 var catName = s.GetString(KEY_CATEGORY);
+                if (string.IsNullOrWhiteSpace(catName)) catName = "default";
                 var catId = (!string.IsNullOrWhiteSpace(catName) && categoryMap.TryGetValue(catName!.N(), out var cid)) ? cid : 0;
 
                 var id = await _dal.BlueprintWrite.InsertStateAsync(defVersionId, catId, name, flags, load);

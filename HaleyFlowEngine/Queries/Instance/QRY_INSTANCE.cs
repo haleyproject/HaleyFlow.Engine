@@ -16,7 +16,7 @@ namespace Haley.Internal {
         public const string GET_BY_ID = $@"SELECT * FROM instance WHERE id = {ID} LIMIT 1;";
         public const string GET_GUID_BY_ID = $@"SELECT guid FROM instance WHERE id = {ID} LIMIT 1;";
         public const string GET_ID_BY_DEF_VERSION_AND_ENTITY_ID = $@"SELECT id FROM instance WHERE def_version = {PARENT_ID} AND entity_id = lower(trim({ENTITY_ID})) LIMIT 1;";
-        public const string GET_GUID_BY_DEF_VERSION_AND_ENTITY_ID = $@"SELECT guid FROM instance WHERE def_version = {PARENT_ID} AND entity_id = lower(trim({ENTITY_ID})) LIMIT 1;";
+        public const string GET_GUID_BY_DEF_VERSION_AND_ENTITY_ID = $@"SELECT guid FROM instance WHERE def_version = {PARENT_ID} AND entity_id = lower(trim({ENTITY_ID})) LIMIT 1 FOR UPDATE;";
 
         // lists should be chronological newest-first
         public const string LIST_BY_DEF_VERSION = $@"SELECT * FROM instance WHERE def_version = {PARENT_ID} ORDER BY created DESC, id DESC;";
@@ -33,7 +33,7 @@ namespace Haley.Internal {
         public const string UPSERT_BY_DEF_ID_AND_ENTITY_ID_RETURN_GUID = $@"INSERT INTO instance (def_version, def_id, entity_id, current_state, last_event, policy_id, flags, metadata) VALUES ({PARENT_ID}, (SELECT parent FROM def_version WHERE id = {PARENT_ID} LIMIT 1), lower(trim({ENTITY_ID})), {STATE_ID}, {EVENT_ID}, {POLICY_ID}, {FLAGS}, {METADATA}) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id); SELECT guid FROM instance WHERE id = LAST_INSERT_ID() LIMIT 1;";
 
         public const string UPDATE_CURRENT_STATE = $@"UPDATE instance SET current_state = {STATE_ID}, last_event = {EVENT_ID} WHERE id = {ID};";
-        public const string UPDATE_CURRENT_STATE_CAS = $@"UPDATE instance SET current_state = {TO_ID}, last_event = {EVENT_ID} WHERE id = {ID} AND current_state = {FROM_ID};";
+        public const string UPDATE_CURRENT_STATE_CAS = $@"UPDATE instance SET current_state = {TO_ID}, last_event = {EVENT_ID}, revision = revision + 1 WHERE id = {ID} AND current_state = {FROM_ID};";
 
         public const string SET_FLAGS = $@"UPDATE instance SET flags = {FLAGS} WHERE id = {ID};";
         public const string ADD_FLAGS = $@"UPDATE instance SET flags = (flags | {FLAGS}) WHERE id = {ID};";

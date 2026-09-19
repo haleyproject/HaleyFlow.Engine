@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <InternalsVisibleTo Include="WFE.Test" Key="002400000480000094000000060200000024000052534131000400000100010045fcbdddf3699f7c3607dab0bdfa35be6d8494080f3b3c8eb0960143f39a394a9128f20245667b15859c6a02c941a4e6c25331324b98f38df7b87bb564393e083c23015e0d6794e457faf2c7450b7791f19bfac4b52c89ba0089eafdf973dc942d43903b1813d31574cc0770291d02c821696af9d9d177950a5ed511337ee8c0" />
+  </ItemGroup>
   <PropertyGroup>
     <HaleyProject Condition="'$(HaleyProject)' == ''">$(MSBuildProjectDirectory)\..\..</HaleyProject>
   </PropertyGroup>

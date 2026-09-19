@@ -237,6 +237,7 @@ namespace Haley.Services {
                     TriggerCount = r.GetInt(KEY_TRIGGER_COUNT),
                     MaxTrigger = r.GetInt(KEY_MAX_TRIGGER),
                     LastTrigger = r.GetDateTime(KEY_LAST_TRIGGER) ?? DateTime.UtcNow,
+                    CreatedAt = r.GetDateTime("ack_created") ?? throw new InvalidOperationException("ACK creation timestamp is missing."),
                     NextDue = r.GetDateTime(KEY_NEXT_DUE),
                     Event = evt
                 });
@@ -267,6 +268,7 @@ namespace Haley.Services {
                     TriggerCount = r.GetInt(KEY_TRIGGER_COUNT),
                     MaxTrigger = r.GetInt(KEY_MAX_TRIGGER),
                     LastTrigger = r.GetDateTime(KEY_LAST_TRIGGER) ?? DateTime.UtcNow,
+                    CreatedAt = r.GetDateTime("ack_created") ?? throw new InvalidOperationException("ACK creation timestamp is missing."),
                     NextDue = r.GetDateTime(KEY_NEXT_DUE),
                     Event = evt
                 });
@@ -289,43 +291,19 @@ namespace Haley.Services {
             var list = new List<ILifeCycleDispatchItem>(rows.Count);
             foreach (var r in rows) {
                 load.Ct.ThrowIfCancellationRequested();
-                var evt = new LifeCycleHookEvent {
-                    ConsumerId = r.GetLong(KEY_CONSUMER),
-                    InstanceGuid = r.GetString(KEY_INSTANCE_GUID),
-                    DefinitionId = r.GetNullableLong(KEY_DEF_ID) ?? 0,
-                    DefinitionVersionId = r.GetNullableLong(KEY_DEF_VERSION_ID) ?? 0,
-                    EntityId = r.GetString(KEY_ENTITY_ID) ?? string.Empty,
-                    OccurredAt = r.GetDateTimeOffset(KEY_HOOK_CREATED) ?? DateTimeOffset.UtcNow,
-                    AckGuid = r.GetString(KEY_ACK_GUID) ?? string.Empty,
-                    Metadata = r.GetString(KEY_METADATA),
-                    OnEntry = r.GetBool(KEY_ON_ENTRY),
-                    Route = r.GetString(KEY_ROUTE) ?? string.Empty,
-                    HookType = (HookType)r.GetInt(KEY_HOOK_TYPE),
-                    GroupName = r.GetString(KEY_GROUP_NAME),
-                    RunCount = r.GetInt(KEY_RUN_COUNT),
-                    OnSuccessEvent = null,
-                    OnFailureEvent = null,
-                    NotBefore = null,
-                    Deadline = null
-                };
-
+                var hctx = new HookContext();
                 var policyJson = r.GetString(KEY_POLICY_JSON);
-                if (!string.IsNullOrWhiteSpace(policyJson) && evt.DefinitionVersionId > 0) {
-                    var bp = await _bp.GetBlueprintByVersionIdAsync(evt.DefinitionVersionId, load.Ct);
-                    var stateId = r.GetLong(KEY_STATE_ID);
-                    var viaEventId = r.GetLong(KEY_VIA_EVENT);
-                    var hookRoute = evt.Route;
-
-                    if (bp.StatesById.TryGetValue(stateId, out var toState) && bp.EventsById.TryGetValue(viaEventId, out var viaEvent)) {
-                        var hctx = _policy.ResolveHookContextFromJson(policyJson!, toState, viaEvent, hookRoute, load.Ct);
-
-                        evt.Params = hctx.Params;
-                        evt.OnSuccessEvent = hctx.OnSuccessEvent;
-                        evt.OnFailureEvent = hctx.OnFailureEvent;
-                        evt.NotBefore = hctx.NotBefore;
-                        evt.Deadline = hctx.Deadline;
-                    }
+                var defVersionId = r.GetLong(KEY_DEF_VERSION_ID);
+                if (!string.IsNullOrWhiteSpace(policyJson) && defVersionId > 0) {
+                    var bp = await _bp.GetBlueprintByVersionIdAsync(defVersionId, load.Ct);
+                    bp.EventsById.TryGetValue(r.GetLong(KEY_VIA_EVENT), out var viaEvent);
+                    if (bp.StatesById.TryGetValue(r.GetLong(KEY_STATE_ID), out var toState))
+                        hctx = _policy.ResolveHookContextFromJson(policyJson, toState, viaEvent,
+                            r.GetString(KEY_ROUTE) ?? string.Empty, load.Ct);
                 }
+                var evt = HookEventFactory.Create(r, r, hctx, r.GetLong(KEY_CONSUMER),
+                    r.GetString(KEY_ACK_GUID) ?? string.Empty,
+                    r.GetDateTimeOffset(KEY_HOOK_CREATED) ?? DateTimeOffset.UtcNow, r.GetInt(KEY_RUN_COUNT));
 
                 list.Add(new LifeCycleDispatchItem {
                     Kind = LifeCycleEventKind.Hook,
@@ -336,6 +314,7 @@ namespace Haley.Services {
                     TriggerCount = r.GetInt(KEY_TRIGGER_COUNT),
                     MaxTrigger = r.GetInt(KEY_MAX_TRIGGER),
                     LastTrigger = r.GetDateTime(KEY_LAST_TRIGGER) ?? DateTime.UtcNow,
+                    CreatedAt = r.GetDateTime("ack_created") ?? throw new InvalidOperationException("ACK creation timestamp is missing."),
                     NextDue = r.GetDateTime(KEY_NEXT_DUE),
                     Event = evt
                 });

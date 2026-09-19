@@ -1,5 +1,9 @@
 # Haley Flow Engine — Overview
 
+## Protocol and recovery update
+
+The current durable execution contract, ACK gate semantics, consumer continuation guarantees, schema upgrade, and tests are documented in [Protocol conformance and recovery changes](PROTOCOL_RECOVERY_CHANGES.md). Self-loops create lifecycle occurrences. Shared protocol validation runs before imports. All validation consumers must finish before the selected rule's ordered hooks are released. Pending execution and trigger receipts make ACK progression and continuation recoverable.
+
 A MariaDB-backed macro workflow/state-machine engine. It tracks **what state a business entity is in**, drives it through **policy-defined transitions**, emits **hook events** for downstream work, and retries delivery until acknowledged.
 
 ---
