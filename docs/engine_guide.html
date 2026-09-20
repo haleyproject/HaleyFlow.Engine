@@ -270,6 +270,13 @@
   </div>
 
   <div id="nav">
+      <div class="nav-section">
+        <button class="nav-group-btn" onclick="toggleGroup(this)"><span class="caret">&#9662;</span> Relay review</button>
+        <div class="nav-items">
+          <button class="nav-item" onclick="gotoSection('relay-engine-enhancements')">Relay engine enhancements</button>
+        </div>
+      </div>
+
 
     <div class="nav-section">
       <button class="nav-group-btn" onclick="toggleGroup(this)">Overview <span class="caret">▾</span></button>
@@ -613,7 +620,32 @@ _ = Task.Run(() => BeatLoop(engine, envCode, myGuid, cts.Token)); <span class="c
   </section>
 
   <!-- ──────────────── FLOW ──────────────── -->
-  <section class="doc-section" id="flow-trigger">
+
+      <section class="doc-section" id="relay-engine-enhancements">
+        <div class="section-label">Discussion and design review</div>
+        <h2 class="section-title">Relay engine enhancements</h2>
+        <div class="callout warn">
+          <div class="callout-title">Proposal for review, 19 September 2026</div>
+          <p>The discussion is documented for an implementation decision. These enhancements are not implemented or approved by this guide. The agreed policy-versioning rule is recorded below.</p>
+        </div>
+        <p>A small application can benefit from configurable orchestration even when it does not need the full engine's database-backed dispatch, acknowledgements, reminders, and recovery. An outbox makes handoffs reliable; an interpreter decides which operations become eligible and how their outcomes affect the process.</p>
+        <p>For leave approval, stable application operations can request one person's approval and apply approved leave. Configuration should be able to select one or two managers, activate their tasks together or sequentially, require any or all approvals, and retain HR as the final authority. Manager approval and rejection can both route to HR when those decisions are provisional. Creating an approval task successfully is separate from receiving the person's approval.</p>
+        <p>The proposed relay executes one turn inline, returns when human input is needed, and resumes when the application supplies a recorded decision. The application owns approval tasks, authorization, transactions, persistence, concurrency, and any outbox integration. No call remains open while a person takes hours or days to respond.</p>
+        <h3 class="sub-title" id="relay-enhancements-versioning-decision">Agreed versioning decision</h3>
+        <p><strong>Existing requests keep their original definition and policy revision, including stages that have not started. New requests use the latest published, validated revision.</strong> Published revisions remain immutable and retrievable, and the application persists the selected revision or snapshot so it survives restarts. Runtime refresh must not replace the policy of a waiting request.</p>
+        <h3 class="sub-title" id="relay-enhancements-current-gaps">Current gaps and concerns</h3>
+        <ul>
+          <li>The standard host initializes a snapshot at startup and has no integrated revision-aware refresh or request pinning.</li>
+          <li>Same-order handlers run sequentially; Boolean gates do not supply general any/all participant aggregation or first-class resumable groups.</li>
+          <li>Duplicate hook routes are rejected within a rule, and shared mutable context prevents safely adding concurrency by only changing the execution loop.</li>
+          <li>Required gate handlers can be skipped when absent, blocked results can leave context state advanced, and automatic follow-up has no hop budget.</li>
+          <li>The default state store is in memory. Its state-string contract and the host's load/execute/save sequence need a defined revision, progress, concurrency, and side-effect consistency model.</li>
+        </ul>
+        <p>Business approval rules remain distinct from delivery <code>ack_mode</code>. Existing gate, effect, order, and routing semantics must be preserved or deliberately revised through a shared contract. Passing an <code>approval.rule</code> parameter to a handler does not mean the relay already evaluates human votes.</p>
+        <p>Read the <a href="workflow_relay_guide.html#relay-engine-enhancements">complete Relay engine enhancements section</a> or the <a href="RELAY_ENGINE_ENHANCEMENTS.md">Markdown discussion record</a> for the detailed leave scenarios, all sixteen findings, design options, compatibility constraints, proposed stages, acceptance scenarios, and decisions still open.</p>
+      </section>
+
+<section class="doc-section" id="flow-trigger">
     <div class="section-label">How It Works</div>
     <h2 class="section-title">How It Works</h2>
     <h3 class="sub-title">3.1 Trigger (Application → Engine)</h3>
